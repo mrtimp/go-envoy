@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jessevdk/go-flags"
+	"github.com/joho/godotenv"
 )
 
 type EnvoyResponse struct {
@@ -43,12 +44,11 @@ type State struct {
 	Baseline float64 `json:"baseline"` // whLifetime at midnight
 }
 
-// const statePath = "/data/state.json"
-const statePath = "./data_state.json"
+const statePath = "/data/state.json"
 
 type Options struct {
 	ApiKey    string `short:"a" long:"api-key" description:"The PVOutput API key" env:"API_KEY" required:"true"`
-	Debug     bool   `short:"d" long:"debug" description:"Show debug output"`
+	EnvFile   string `short:"e" long:"env-file" description:"Path to a file containing environment variables"`
 	IpAddress string `short:"i" long:"ip-address" description:"The IP address (or hostname) of the Envoy Gateway" env:"IP_ADDRESS" required:"true"`
 	Token     string `short:"t" long:"token" description:"The API token for the Envoy Gateway" env:"TOKEN" required:"true"`
 	SystemID  string `short:"s" long:"system-id" description:"The PVOutput System ID" env:"SYSTEM_ID" required:"true"`
@@ -63,6 +63,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if opts.EnvFile != "" {
+		err := godotenv.Load(opts.EnvFile)
+		if err != nil {
+			log.Fatalf("Error loading '%s' environment file", opts.EnvFile)
+		}
+	}
+
 	httpClient := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
@@ -71,7 +78,6 @@ func main() {
 	}
 
 	// https://enphase.com/download/iq-gateway-access-using-local-apis-or-local-ui-token-based-authentication-tech-brief
-
 	req, err := http.NewRequest("GET", fmt.Sprintf("https://%s/production.json", opts.IpAddress), nil)
 	if err != nil {
 		log.Fatalf("Failed to create request: %v", err)
@@ -81,12 +87,15 @@ func main() {
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", opts.Token))
 
 	resp, err := httpClient.Do(req)
+
 	if err != nil {
 		log.Fatalf("Failed to send request: %v", err)
 	}
+
 	defer resp.Body.Close()
 
 	var readings EnvoyResponse
+
 	if err := json.NewDecoder(resp.Body).Decode(&readings); err != nil {
 		log.Fatalf("Failed to decode JSON: %v", err)
 	}
@@ -104,12 +113,6 @@ func main() {
 		}
 	}
 
-	if opts.Debug {
-		fmt.Printf("Watt hours today: %d\n", wattHoursToday)
-		fmt.Printf("Watt now: %f\n", wattsNow)
-		fmt.Printf("Voltage: %f\n", voltage)
-	}
-
 	cfg := Config{
 		APIKey:   opts.ApiKey,
 		SystemID: opts.SystemID,
@@ -123,6 +126,7 @@ func main() {
 	}
 
 	err = upload(cfg, reading)
+
 	if err != nil {
 		log.Fatalf("Upload to PVOutput failed: %v", err)
 	}
@@ -200,7 +204,7 @@ func loadOrInit(currentWh float64) (float64, error) {
 }
 
 func initState(date string, baseline float64) (float64, error) {
-	s := State{Date: date, Baseline: baseline}
+	state := State{Date: date, Baseline: baseline}
 	f, err := os.Create(statePath)
 
 	if err != nil {
@@ -209,9 +213,10 @@ func initState(date string, baseline float64) (float64, error) {
 
 	defer f.Close()
 
-	if err := json.NewEncoder(f).Encode(s); err != nil {
+	if err := json.NewEncoder(f).Encode(state); err != nil {
 		return 0, fmt.Errorf("failed to encode state: %w", err)
 	}
 
-	return 0, nil // new day, zero energy so far
+	// new day, zero energy so far
+	return 0, nil
 }
